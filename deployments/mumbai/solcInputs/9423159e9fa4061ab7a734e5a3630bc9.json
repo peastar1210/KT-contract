@@ -1,0 +1,42 @@
+{
+  "language": "Solidity",
+  "sources": {
+    "contracts/dependencies/IERC20.sol": {
+      "content": "// SPDX-License-Identifier: UNLICENSED\r\npragma solidity ^0.8.24;\r\n\r\ninterface IERC20 {\r\n  function totalSupply() external view returns (uint256);\r\n  function balanceOf(address account) external view returns (uint256);\r\n  function transfer(address recipient, uint256 amount) external returns (bool);\r\n  function allowance(\r\n    address owner,\r\n    address spender\r\n  ) external view returns (uint256);\r\n  function approve(address spender, uint256 amount) external returns (bool);\r\n  function transferFrom(\r\n    address sender,\r\n    address recipient,\r\n    uint256 amount\r\n  ) external returns (bool);\r\n}\r\n"
+    },
+    "contracts/dependencies/IJobBoard.sol": {
+      "content": "// SPDX-License-Identifier: UNLICENSED\r\npragma solidity ^0.8.24;\r\n\r\ninterface IJobBoard {\r\n  function getApplicationCount(\r\n    address _address\r\n  ) external view returns (uint256);\r\n  function getApplicationsQuality(\r\n    address _address\r\n  ) external view returns (uint256);\r\n}\r\n"
+    },
+    "contracts/Staking.sol": {
+      "content": "// SPDX-License-Identifier: UNLICENSED\r\npragma solidity ^0.8.24;\r\n\r\nimport './dependencies/IERC20.sol';\r\nimport './dependencies/IJobBoard.sol';\r\n\r\ncontract StakingRewards {\r\n  IERC20 public immutable stakingToken;\r\n  IERC20 public immutable rewardsToken;\r\n  IJobBoard public immutable jobBoard;\r\n\r\n  address public owner;\r\n\r\n  // Duration of rewards to be paid out (in seconds)\r\n  uint256 public duration;\r\n  // Timestamp of when the rewards finish\r\n  uint256 public finishAt;\r\n  // Minimum of last updated time and reward finish time\r\n  uint256 public updatedAt;\r\n  // Reward to be paid out per second\r\n  uint256 public rewardRate;\r\n  // Sum of (reward rate * dt * 1e18 / total supply)\r\n  uint256 public rewardPerTokenStored;\r\n  // User address => rewardPerTokenStored\r\n  mapping(address => uint256) public userRewardPerTokenPaid;\r\n  // User address => rewards to be claimed\r\n  mapping(address => uint256) public rewards;\r\n\r\n  // Total staked\r\n  uint256 public totalSupply;\r\n  // User address => staked amount\r\n  mapping(address => uint256) public balanceOf;\r\n\r\n  constructor(address _stakingToken, address _rewardToken, address _jobBoard) {\r\n    owner = msg.sender;\r\n    stakingToken = IERC20(_stakingToken);\r\n    rewardsToken = IERC20(_rewardToken);\r\n    jobBoard = IJobBoard(_jobBoard);\r\n  }\r\n\r\n  modifier onlyOwner() {\r\n    require(msg.sender == owner, 'not authorized');\r\n    _;\r\n  }\r\n\r\n  // update current reward state\r\n  modifier updateReward(address _account) {\r\n    rewardPerTokenStored = rewardPerToken();\r\n    updatedAt = lastTimeRewardApplicable();\r\n\r\n    if (_account != address(0)) {\r\n      rewards[_account] = earned(_account);\r\n      userRewardPerTokenPaid[_account] = rewardPerTokenStored;\r\n    }\r\n\r\n    _;\r\n  }\r\n\r\n  function lastTimeRewardApplicable() public view returns (uint256) {\r\n    return _min(finishAt, block.timestamp);\r\n  }\r\n\r\n  function rewardPerToken() public view returns (uint256) {\r\n    if (totalSupply == 0) {\r\n      return rewardPerTokenStored;\r\n    }\r\n\r\n    return\r\n      rewardPerTokenStored +\r\n      (rewardRate * (lastTimeRewardApplicable() - updatedAt) * 1e18) /\r\n      totalSupply;\r\n  }\r\n\r\n  function stake(uint256 _amount) external updateReward(msg.sender) {\r\n    require(_amount > 0, 'amount = 0');\r\n    stakingToken.transferFrom(msg.sender, address(this), _amount);\r\n    balanceOf[msg.sender] += _amount;\r\n    totalSupply += _amount;\r\n  }\r\n\r\n  function withdraw(uint256 _amount) external updateReward(msg.sender) {\r\n    require(_amount > 0, 'amount = 0');\r\n    balanceOf[msg.sender] -= _amount;\r\n    totalSupply -= _amount;\r\n    stakingToken.transfer(msg.sender, _amount);\r\n  }\r\n\r\n  function earned(address _account) public view returns (uint256) {\r\n    uint applicationCount = jobBoard.getApplicationCount(_account);\r\n    uint applicationQuality = jobBoard.getApplicationsQuality(_account);\r\n    uint applicationAffectValue = 1;\r\n    if (applicationCount != 0)\r\n      applicationAffectValue = applicationQuality / (applicationCount * 5);\r\n    return\r\n      ((balanceOf[_account] *\r\n        (rewardPerToken() *\r\n          applicationAffectValue -\r\n          userRewardPerTokenPaid[_account])) / 1e18) + rewards[_account];\r\n  }\r\n\r\n  function getReward() external updateReward(msg.sender) {\r\n    uint256 reward = rewards[msg.sender];\r\n    if (reward > 0) {\r\n      rewards[msg.sender] = 0;\r\n      rewardsToken.transfer(msg.sender, reward);\r\n    }\r\n  }\r\n\r\n  function setRewardsDuration(uint256 _duration) external onlyOwner {\r\n    require(finishAt < block.timestamp, 'reward duration not finished');\r\n    duration = _duration;\r\n  }\r\n\r\n  function notifyRewardAmount(\r\n    uint256 _amount\r\n  ) external onlyOwner updateReward(address(0)) {\r\n    if (block.timestamp >= finishAt) {\r\n      rewardRate = _amount / duration;\r\n    } else {\r\n      uint256 remainingRewards = (finishAt - block.timestamp) * rewardRate;\r\n      rewardRate = (_amount + remainingRewards) / duration;\r\n    }\r\n\r\n    require(rewardRate > 0, 'reward rate = 0');\r\n    require(\r\n      rewardRate * duration <= rewardsToken.balanceOf(address(this)),\r\n      'reward amount > balance'\r\n    );\r\n\r\n    finishAt = block.timestamp + duration;\r\n    updatedAt = block.timestamp;\r\n  }\r\n\r\n  function _min(uint256 x, uint256 y) private pure returns (uint256) {\r\n    return x <= y ? x : y;\r\n  }\r\n}\r\n"
+    }
+  },
+  "settings": {
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "evmVersion": "paris",
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "evm.methodIdentifiers",
+          "metadata",
+          "devdoc",
+          "userdoc",
+          "storageLayout",
+          "evm.gasEstimates"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    },
+    "metadata": {
+      "useLiteralContent": true
+    }
+  }
+}
