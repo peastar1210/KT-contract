@@ -90,12 +90,14 @@ contract StakingRewards {
     uint applicationQuality = jobBoard.getApplicationsQuality(_account);
     uint applicationAffectValue = 1;
     if (applicationCount != 0)
-      applicationAffectValue = applicationQuality / (applicationCount * 5);
-    return
-      ((balanceOf[_account] *
-        (rewardPerToken() *
-          applicationAffectValue -
-          userRewardPerTokenPaid[_account])) / 1e18) + rewards[_account];
+      applicationAffectValue =
+        (applicationQuality * 100) /
+        (applicationCount * 5);
+    uint value = ((balanceOf[_account] *
+      (rewardPerToken() *
+        applicationAffectValue -
+        userRewardPerTokenPaid[_account])) / 1e18) + rewards[_account];
+    return value / 100;
   }
 
   function getReward() external updateReward(msg.sender) {
